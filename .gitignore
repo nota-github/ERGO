@@ -72,9 +72,6 @@ venv.bak/
 # Poetry
 poetry.lock
 
-# uv
-uv.lock
-
 # Local config files
 *.local
 

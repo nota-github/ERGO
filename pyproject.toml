@@ -1,0 +1,14 @@
+[project]
+name = "ergo"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = "==3.10.8"
+dependencies = [
+    "accelerate==1.10.1",
+    "openai==2.0.0",
+    "pandas==2.3.3",
+    "pyarrow==21.0.0",
+    "qwen-vl-utils==0.0.14",
+    "vllm==0.10.2",
+]
