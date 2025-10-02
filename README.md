@@ -22,9 +22,10 @@ ERGO (Efficient Reasoning & Guided Observation) is a large vision–language mod
 curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone https://github.com/nota-github/ERGO.git
 cd ERGO
-uv pip install -e .
-uv pip install flash-attn --no-build-isolation
+uv venv
+uv sync
 source .venv/bin/activate
+uv pip install -e .
 ```
 
 ## Usage
@@ -40,7 +41,6 @@ See [`data/README.md`](data/README.md) for how to prepare datasets
 
 ### Evaluation with vLLM
 
-
 1. Serving with vLLM
 
 ```bash
@@ -50,9 +50,10 @@ bash ./scripts/run_vllm.sh
 2. Run eval.py
 
 ```bash
-MAX_VISION_TOKEN_NUM=1280 \
-VLLM_ENDPOINT=127.0.0.1:8008 \
-DATA_ROOT=./data \
+export MAX_VISION_TOKEN_NUM=1280
+export VLLM_ENDPOINT=http://127.0.0.1:8008/v1
+export DATA_ROOT=./data
+
 python ./src/ergo/eval.py \
     --dataset {choose from [vstar, mmerwl, hrbench]} \
     --data_root $DATA_ROOT\
