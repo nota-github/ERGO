@@ -1,5 +1,8 @@
 ## Prepare evaluation data
-
+### git-lfs
+```
+git lfs install
+```
 ### V*
 ```
 git clone https://huggingface.co/datasets/craigwu/vstar_bench
