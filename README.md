@@ -11,8 +11,10 @@
 
 ERGO (Efficient Reasoning & Guided Observation) is a large vision–language model trained with reinforcement learning on efficiency objectives, focusing on task-relevant regions to enhance accuracy and achieve up to a 3× speedup in inference.
 
-
 ![](./assets/fig1.png)
+
+## Notice
+- [2026/01/26] 🔥 ERGO have been accepted by ICLR 2026! 
 
 
 ## Installation
