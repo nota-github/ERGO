@@ -8,6 +8,7 @@ import random
 import numpy as np
 from PIL import Image
 from threading import Thread, Lock
+from queue import Queue, Empty
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration, TextIteratorStreamer
 from transformers.image_utils import load_image
 from typing import List, Tuple, Optional
@@ -20,6 +21,8 @@ import time
 IMAGE_FACTOR = 28
 MIN_PIXELS = 4 * 28 * 28
 MAX_PIXELS = 1280 * 28 * 28
+ERGO_MAX_PIXELS = 1280 * 28 * 28
+QWEN_MAX_PIXELS = 16384 * 28 * 28
 MAX_NEW_TOKENS = 1024
 DEFAULT_SEED = 42
 
@@ -146,10 +149,10 @@ def crop_with_zoom(
     return cropped_image, [x1, y1, x2, y2], (new_w, new_h)
 
 
-def preprocess_image(img: Image.Image) -> Tuple[Image.Image, Image.Image, int, int, float, float]:
+def preprocess_image(img: Image.Image, max_pixels: int = MAX_PIXELS) -> Tuple[Image.Image, Image.Image, int, int, float, float]:
     width, height = img.size
     resize_h, resize_w = smart_resize(
-        int(height), int(width), max_pixels=MAX_PIXELS, min_pixels=MIN_PIXELS, factor=IMAGE_FACTOR
+        int(height), int(width), max_pixels=max_pixels, min_pixels=MIN_PIXELS, factor=IMAGE_FACTOR
     )
     width_scale = width / resize_w
     height_scale = height / resize_h
@@ -159,7 +162,7 @@ def preprocess_image(img: Image.Image) -> Tuple[Image.Image, Image.Image, int, i
 
 # ============== Model Loading ==============
 print("Loading ERGO model...")
-ergo_processor = AutoProcessor.from_pretrained(ERGO_MODEL_ID, max_pixels=MAX_PIXELS)
+ergo_processor = AutoProcessor.from_pretrained(ERGO_MODEL_ID, max_pixels=ERGO_MAX_PIXELS)
 ergo_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
     ERGO_MODEL_ID,
     torch_dtype=torch.bfloat16,
@@ -168,7 +171,7 @@ ergo_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
 print("ERGO model loaded on cuda:0")
 
 print("Loading Qwen2.5-VL model...")
-qwen_processor = AutoProcessor.from_pretrained(QWEN_MODEL_ID, max_pixels=MAX_PIXELS)
+qwen_processor = AutoProcessor.from_pretrained(QWEN_MODEL_ID, max_pixels=QWEN_MAX_PIXELS)
 qwen_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
     QWEN_MODEL_ID,
     torch_dtype=torch.bfloat16,
@@ -177,26 +180,55 @@ qwen_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
 print("Qwen2.5-VL model loaded on cuda:1")
 
 
-# ============== Streaming State ==============
+# ============== Streaming State with Queue ==============
 class StreamingState:
-    def __init__(self):
-        self.output = []
+    """State for streaming output with queue-based communication."""
+    def __init__(self, output_queue: Queue):
+        self.output_queue = output_queue  # Queue for immediate output streaming
+        self.output = []  # Accumulated output
         self.done = False
         self.start_time = None
         self.end_time = None
+        self.first_token_time = None
+        self.token_count = 0
         self.lock = Lock()
+    
+    def put_update(self, update_type: str, data=None):
+        """Put an update into the queue immediately."""
+        self.output_queue.put({
+            "type": update_type,
+            "data": data,
+            "time": time.time(),
+            "first_token_time": self.first_token_time,
+            "token_count": self.token_count,
+            "done": self.done,
+        })
+    
+    def get_ttft(self):
+        """Get Time to First Token in seconds."""
+        if self.first_token_time and self.start_time:
+            return self.first_token_time - self.start_time
+        return None
+    
+    def get_tpot(self):
+        """Get Time Per Output Token in milliseconds."""
+        if self.token_count > 1 and self.first_token_time and self.end_time:
+            # Time for tokens after the first one
+            generation_time = self.end_time - self.first_token_time
+            return (generation_time / (self.token_count - 1)) * 1000  # Convert to ms
+        return None
 
 
 # ============== ERGO Inference ==============
 def ergo_inference(image: Image.Image, question: str, state: StreamingState):
-    """ERGO two-stage inference with streaming."""
+    """ERGO two-stage inference with streaming via queue."""
     set_random_seed(DEFAULT_SEED)
     
-    with state.lock:
-        state.start_time = time.time()
+    state.start_time = time.time()
+    state.put_update("start")
     
     # Preprocess
-    orig_img, resized_img, width, height, width_scale, height_scale = preprocess_image(image)
+    orig_img, resized_img, width, height, width_scale, height_scale = preprocess_image(image, max_pixels=ERGO_MAX_PIXELS)
     all_images = [resized_img]
     
     # Stage 1
@@ -222,37 +254,40 @@ def ergo_inference(image: Image.Image, question: str, state: StreamingState):
     
     for new_text in streamer:
         stage1_output += new_text
-        with state.lock:
-            if "<zoom>" in stage1_output and not zoom_detected:
-                zoom_detected = True
-                tmp = stage1_output.split("<zoom>")[0]
-                state.output = [tmp + "\n\n**🔍 Planning Visual Operation...**\n\n"]
-            elif not zoom_detected:
-                state.output = [stage1_output]
+        # Track first token time
+        if state.first_token_time is None:
+            state.first_token_time = time.time()
+            state.put_update("first_token")  # Signal first token immediately!
+        
+        # Count tokens
+        state.token_count += len(new_text.split()) if new_text.strip() else 0
+        
+        if "<zoom>" in stage1_output and not zoom_detected:
+            zoom_detected = True
+            tmp = stage1_output.split("<zoom>")[0]
+            state.output = [tmp + "\n\n**🔍 Planning Visual Operation...**\n\n"]
+        elif not zoom_detected:
+            state.output = [stage1_output]
+        
+        state.put_update("token", new_text)
     
     thread.join()
-    
-    with state.lock:
-        state.output = [stage1_output + "\n\n"]
+    state.output = [stage1_output + "\n\n"]
     
     # Check for zoom
     bbox = parse_zoom_bbox_from_text(stage1_output)
     
     if bbox is not None:
-        with state.lock:
-            state.output.append(f"**📸 Executing Visual Operation...** @crop_image(bbox={bbox})\n\n")
+        state.output.append(f"**📸 Executing Visual Operation...** @crop_image(bbox={bbox})\n\n")
+        state.put_update("zoom_start")
         
         cropped_img, actual_bbox, smart_wh = crop_with_zoom(
             orig_img, stage1_output, width_scale, height_scale, width, height,
             factor=IMAGE_FACTOR, min_pixels=MIN_PIXELS, max_pixels=MAX_PIXELS,
         )
         
-        tmp_path = os.path.join(cur_dir, "tmp_crop.png")
-        cropped_img.save(tmp_path)
-        
-        with state.lock:
-            state.output.append(f"\n**🔎 Analyzing Zoomed Region...** (size: {smart_wh[0]}x{smart_wh[1]})\n\n")
-            state.output.append({"text": "", "files": [tmp_path]})
+        state.output.append(f"\n**🔎 Analyzing Zoomed Region...** (size: {smart_wh[0]}x{smart_wh[1]})\n\n")
+        state.put_update("zoom_image")
         
         # Stage 2
         all_images.append(cropped_img)
@@ -275,29 +310,28 @@ def ergo_inference(image: Image.Image, question: str, state: StreamingState):
         stage2_output = ""
         for new_text in streamer2:
             stage2_output += new_text
-            with state.lock:
-                state.output = state.output[:4] + [stage2_output]
+            state.token_count += len(new_text.split()) if new_text.strip() else 0
+            state.output = state.output[:4] + [stage2_output]
+            state.put_update("token", new_text)
         
         thread2.join()
-        
-        with state.lock:
-            state.output = state.output[:4] + [stage2_output + "\n\n"]
+        state.output = state.output[:4] + [stage2_output + "\n\n"]
     
-    with state.lock:
-        state.end_time = time.time()
-        state.done = True
+    state.end_time = time.time()
+    state.done = True
+    state.put_update("done")
 
 
 # ============== Qwen Inference ==============
 def qwen_inference(image: Image.Image, question: str, state: StreamingState):
-    """Qwen2.5-VL inference with streaming."""
+    """Qwen2.5-VL inference with streaming via queue."""
     set_random_seed(DEFAULT_SEED)
     
-    with state.lock:
-        state.start_time = time.time()
+    state.start_time = time.time()
+    state.put_update("start")
     
     # Preprocess image same way
-    _, resized_img, _, _, _, _ = preprocess_image(image)
+    _, resized_img, _, _, _, _ = preprocess_image(image, max_pixels=QWEN_MAX_PIXELS)
     
     messages = [
         {"role": "system", "content": QWEN_SYSTEM_PROMPT},
@@ -319,21 +353,58 @@ def qwen_inference(image: Image.Image, question: str, state: StreamingState):
     output = ""
     for new_text in streamer:
         output += new_text
-        with state.lock:
-            state.output = [output]
+        # Track first token time
+        if state.first_token_time is None:
+            state.first_token_time = time.time()
+            state.put_update("first_token")  # Signal first token immediately!
+        
+        # Count tokens
+        state.token_count += len(new_text.split()) if new_text.strip() else 0
+        state.output = [output]
+        state.put_update("token", new_text)
     
     thread.join()
     
-    with state.lock:
-        state.end_time = time.time()
-        state.done = True
+    state.end_time = time.time()
+    state.done = True
+    state.put_update("done")
+
+
+# ============== Metrics Formatting ==============
+def build_metrics_header(total_time: float, is_done: bool, ttft: float = None, tpot: float = None, tokens: int = 0, is_first: bool = False) -> str:
+    """Build a formatted metrics header with TTFT and TPOT."""
+    status = '✅' if is_done else '🔄'
+    
+    header = f"⏱️ **Total: {total_time:.1f}s** {status}\n\n"
+    
+    # First responder indicator
+    if is_first and ttft is not None:
+        header += "🚀 **FIRST TO RESPOND!**\n\n"
+    
+    # Add metrics table
+    metrics_parts = []
+    
+    if ttft is not None:
+        metrics_parts.append(f"**TTFT:** {ttft*1000:.0f}ms")
+    
+    if tpot is not None:
+        metrics_parts.append(f"**TPOT:** {tpot:.1f}ms/token")
+    
+    if tokens > 0:
+        metrics_parts.append(f"**Tokens:** ~{tokens}")
+    
+    if metrics_parts:
+        header += " | ".join(metrics_parts) + "\n\n---\n\n"
+    
+    return header
+
 
 
 # ============== Combined Inference ==============
 def run_comparison(image, question):
-    """Run both models in parallel and yield updates."""
+    """Run both models in parallel with queue-based streaming."""
     if image is None or not question.strip():
-        yield [], []
+        yield [], [], []
         return
     
     # Load and prepare image
@@ -344,9 +415,23 @@ def run_comparison(image, question):
     if hasattr(img, 'convert'):
         img = img.convert("RGB")
     
-    # Initialize states
-    ergo_state = StreamingState()
-    qwen_state = StreamingState()
+    # Save input image for display in chat
+    input_img_path = os.path.join(cur_dir, "tmp_input.png")
+    img.save(input_img_path)
+    
+    # Create user message with image and question
+    user_input = [
+        {"role": "user", "content": {"path": input_img_path}},
+        {"role": "user", "content": question},
+    ]
+    
+    # Create separate queues for each model
+    ergo_queue = Queue()
+    qwen_queue = Queue()
+    
+    # Initialize states with queues
+    ergo_state = StreamingState(ergo_queue)
+    qwen_state = StreamingState(qwen_queue)
     
     # Start both threads
     ergo_thread = Thread(target=ergo_inference, args=(img.copy(), question, ergo_state))
@@ -355,41 +440,263 @@ def run_comparison(image, question):
     ergo_thread.start()
     qwen_thread.start()
     
-    # Poll and yield updates
+    # Track which model responded first
+    ergo_first_token_received = False
+    qwen_first_token_received = False
+    first_responder = None
+    
+    # Non-blocking queue polling - yield as soon as any queue has data
     while not (ergo_state.done and qwen_state.done):
-        with ergo_state.lock:
-            ergo_output = list(ergo_state.output)
-            ergo_time = (ergo_state.end_time or time.time()) - ergo_state.start_time if ergo_state.start_time else 0
-            ergo_done = ergo_state.done
+        updated = False
         
-        with qwen_state.lock:
-            qwen_output = list(qwen_state.output)
-            qwen_time = (qwen_state.end_time or time.time()) - qwen_state.start_time if qwen_state.start_time else 0
-            qwen_done = qwen_state.done
+        # Poll ERGO queue (non-blocking)
+        try:
+            while True:
+                msg = ergo_queue.get_nowait()
+                updated = True
+                if msg["type"] == "first_token" and not ergo_first_token_received:
+                    ergo_first_token_received = True
+                    if first_responder is None:
+                        first_responder = "ERGO"
+        except Empty:
+            pass
         
-        # Build timing headers
-        ergo_header = f"⏱️ **{ergo_time:.1f}s** {'✅' if ergo_done else '🔄'}\n\n"
-        qwen_header = f"⏱️ **{qwen_time:.1f}s** {'✅' if qwen_done else '🔄'}\n\n"
+        # Poll Qwen queue (non-blocking)
+        try:
+            while True:
+                msg = qwen_queue.get_nowait()
+                updated = True
+                if msg["type"] == "first_token" and not qwen_first_token_received:
+                    qwen_first_token_received = True
+                    if first_responder is None:
+                        first_responder = "Qwen"
+        except Empty:
+            pass
         
-        yield [ergo_header] + ergo_output, [qwen_header] + qwen_output
-        time.sleep(0.1)
+        # Build current state
+        ergo_output = list(ergo_state.output)
+        ergo_time = (ergo_state.end_time or time.time()) - ergo_state.start_time if ergo_state.start_time else 0
+        ergo_done = ergo_state.done
+        ergo_ttft = ergo_state.get_ttft()
+        ergo_tpot = ergo_state.get_tpot() if ergo_done else None
+        ergo_tokens = ergo_state.token_count
+        
+        qwen_output = list(qwen_state.output)
+        qwen_time = (qwen_state.end_time or time.time()) - qwen_state.start_time if qwen_state.start_time else 0
+        qwen_done = qwen_state.done
+        qwen_ttft = qwen_state.get_ttft()
+        qwen_tpot = qwen_state.get_tpot() if qwen_done else None
+        qwen_tokens = qwen_state.token_count
+        
+        # Build timing headers with first responder indicator
+        ergo_header = build_metrics_header(
+            ergo_time, ergo_done, ergo_ttft, ergo_tpot, ergo_tokens,
+            is_first=(first_responder == "ERGO")
+        )
+        qwen_header = build_metrics_header(
+            qwen_time, qwen_done, qwen_ttft, qwen_tpot, qwen_tokens,
+            is_first=(first_responder == "Qwen")
+        )
+        
+        yield user_input, [ergo_header] + ergo_output, [qwen_header] + qwen_output
+        
+        # Very short sleep only if no updates (to avoid busy waiting)
+        if not updated:
+            time.sleep(0.01)  # 10ms polling when idle
     
     ergo_thread.join()
     qwen_thread.join()
     
-    # Final output
-    with ergo_state.lock:
+    # Final output with comparison
+    ergo_output = list(ergo_state.output)
+    ergo_time = ergo_state.end_time - ergo_state.start_time if ergo_state.start_time else 0
+    ergo_ttft = ergo_state.get_ttft()
+    ergo_tpot = ergo_state.get_tpot()
+    ergo_tokens = ergo_state.token_count
+    
+    qwen_output = list(qwen_state.output)
+    qwen_time = qwen_state.end_time - qwen_state.start_time if qwen_state.start_time else 0
+    qwen_ttft = qwen_state.get_ttft()
+    qwen_tpot = qwen_state.get_tpot()
+    qwen_tokens = qwen_state.token_count
+    
+    # Build final comparison
+    comparison = build_final_comparison(
+        ergo_ttft, ergo_tpot, ergo_time, ergo_tokens,
+        qwen_ttft, qwen_tpot, qwen_time, qwen_tokens,
+        first_responder
+    )
+    
+    ergo_header = build_metrics_header(
+        ergo_time, True, ergo_ttft, ergo_tpot, ergo_tokens,
+        is_first=(first_responder == "ERGO")
+    )
+    qwen_header = build_metrics_header(
+        qwen_time, True, qwen_ttft, qwen_tpot, qwen_tokens,
+        is_first=(first_responder == "Qwen")
+    )
+    
+    # Append comparison to both outputs
+    ergo_final = ergo_output + [f"\n\n{comparison}"]
+    qwen_final = qwen_output + [f"\n\n{comparison}"]
+    
+    yield user_input, [ergo_header] + ergo_final, [qwen_header] + qwen_final
+
+
+# ============== Single Model Run Functions ==============
+def run_ergo_only(image, question):
+    """Run ERGO model only with queue-based streaming."""
+    if image is None or not question.strip():
+        yield []
+        return
+    
+    # Load and prepare image
+    if isinstance(image, str):
+        img = load_image(image)
+    else:
+        img = image
+    if hasattr(img, 'convert'):
+        img = img.convert("RGB")
+    
+    # Save input image
+    input_img_path = os.path.join(cur_dir, "tmp_input_ergo.png")
+    img.save(input_img_path)
+    
+    user_input = [
+        {"role": "user", "content": {"path": input_img_path}},
+        {"role": "user", "content": question},
+    ]
+    
+    # Create queue and state
+    ergo_queue = Queue()
+    ergo_state = StreamingState(ergo_queue)
+    
+    # Start inference thread
+    ergo_thread = Thread(target=ergo_inference, args=(img.copy(), question, ergo_state))
+    ergo_thread.start()
+    
+    # Stream updates
+    while not ergo_state.done:
+        # Drain queue (non-blocking)
+        try:
+            while True:
+                ergo_queue.get_nowait()
+        except Empty:
+            pass
+        
         ergo_output = list(ergo_state.output)
-        ergo_time = ergo_state.end_time - ergo_state.start_time if ergo_state.start_time else 0
+        ergo_time = (ergo_state.end_time or time.time()) - ergo_state.start_time if ergo_state.start_time else 0
+        ergo_ttft = ergo_state.get_ttft()
+        ergo_tpot = ergo_state.get_tpot() if ergo_state.done else None
+        ergo_tokens = ergo_state.token_count
+        
+        header = build_metrics_header(ergo_time, ergo_state.done, ergo_ttft, ergo_tpot, ergo_tokens)
+        yield format_for_chatbot(user_input + [header] + ergo_output)
+        time.sleep(0.05)
     
-    with qwen_state.lock:
+    ergo_thread.join()
+    
+    # Final output
+    ergo_output = list(ergo_state.output)
+    ergo_time = ergo_state.end_time - ergo_state.start_time if ergo_state.start_time else 0
+    ergo_ttft = ergo_state.get_ttft()
+    ergo_tpot = ergo_state.get_tpot()
+    ergo_tokens = ergo_state.token_count
+    
+    header = build_metrics_header(ergo_time, True, ergo_ttft, ergo_tpot, ergo_tokens)
+    yield format_for_chatbot(user_input + [header] + ergo_output)
+
+
+def run_qwen_only(image, question):
+    """Run Qwen model only with queue-based streaming."""
+    if image is None or not question.strip():
+        yield []
+        return
+    
+    # Load and prepare image
+    if isinstance(image, str):
+        img = load_image(image)
+    else:
+        img = image
+    if hasattr(img, 'convert'):
+        img = img.convert("RGB")
+    
+    # Save input image
+    input_img_path = os.path.join(cur_dir, "tmp_input_qwen.png")
+    img.save(input_img_path)
+    
+    user_input = [
+        {"role": "user", "content": {"path": input_img_path}},
+        {"role": "user", "content": question},
+    ]
+    
+    # Create queue and state
+    qwen_queue = Queue()
+    qwen_state = StreamingState(qwen_queue)
+    
+    # Start inference thread
+    qwen_thread = Thread(target=qwen_inference, args=(img.copy(), question, qwen_state))
+    qwen_thread.start()
+    
+    # Stream updates
+    while not qwen_state.done:
+        # Drain queue (non-blocking)
+        try:
+            while True:
+                qwen_queue.get_nowait()
+        except Empty:
+            pass
+        
         qwen_output = list(qwen_state.output)
-        qwen_time = qwen_state.end_time - qwen_state.start_time if qwen_state.start_time else 0
+        qwen_time = (qwen_state.end_time or time.time()) - qwen_state.start_time if qwen_state.start_time else 0
+        qwen_ttft = qwen_state.get_ttft()
+        qwen_tpot = qwen_state.get_tpot() if qwen_state.done else None
+        qwen_tokens = qwen_state.token_count
+        
+        header = build_metrics_header(qwen_time, qwen_state.done, qwen_ttft, qwen_tpot, qwen_tokens)
+        yield format_for_chatbot(user_input + [header] + qwen_output)
+        time.sleep(0.05)
     
-    ergo_header = f"⏱️ **{ergo_time:.1f}s** ✅\n\n"
-    qwen_header = f"⏱️ **{qwen_time:.1f}s** ✅\n\n"
+    qwen_thread.join()
     
-    yield [ergo_header] + ergo_output, [qwen_header] + qwen_output
+    # Final output
+    qwen_output = list(qwen_state.output)
+    qwen_time = qwen_state.end_time - qwen_state.start_time if qwen_state.start_time else 0
+    qwen_ttft = qwen_state.get_ttft()
+    qwen_tpot = qwen_state.get_tpot()
+    qwen_tokens = qwen_state.token_count
+    
+    header = build_metrics_header(qwen_time, True, qwen_ttft, qwen_tpot, qwen_tokens)
+    yield format_for_chatbot(user_input + [header] + qwen_output)
+
+
+def format_for_chatbot(output_list):
+    """Convert output list to Gradio chatbot messages format."""
+    if not output_list:
+        return []
+    
+    messages = []
+    current_text = ""
+    
+    for item in output_list:
+        if isinstance(item, str):
+            current_text += item
+        elif isinstance(item, dict) and "files" in item:
+            if current_text:
+                messages.append({"role": "assistant", "content": current_text})
+                current_text = ""
+            for f in item.get("files", []):
+                messages.append({"role": "assistant", "content": {"path": f}})
+        elif isinstance(item, dict) and "role" in item:
+            if current_text:
+                messages.append({"role": "assistant", "content": current_text})
+                current_text = ""
+            messages.append(item)
+    
+    if current_text:
+        messages.append({"role": "assistant", "content": current_text})
+    
+    return messages
 
 
 # ============== UI ==============
@@ -409,70 +716,58 @@ with gr.Blocks(title="ERGO vs Qwen Comparison") as demo:
     gr.HTML(html_header)
     
     with gr.Row():
+        image_input = gr.Image(label="Upload Image", type="pil")
+        question_input = gr.Textbox(label="Question", placeholder="Ask a question about the image...", lines=3)
+    
+    # Example
+    gr.Examples(
+        examples=[
+            [os.path.join(cur_dir, "../data/demo/demo.jpg"), "What is the color of the umbrella that the man with the orange luggage is holding?"],
+        ],
+        inputs=[image_input, question_input],
+        label="📝 Example",
+    )
+    
+    with gr.Row():
         with gr.Column(scale=1):
-            gr.HTML('<div style="padding: 0.5rem 1rem; background: linear-gradient(90deg, rgba(16, 185, 129, 0.2), transparent); border-left: 3px solid #10b981; border-radius: 4px; margin-bottom: 0.5rem;"><span style="color: #10b981; font-weight: 600;">🟢 ERGO - Two-Stage Zoom Reasoning</span></div>')
-            ergo_output = gr.Chatbot(label="ERGO", height=500)
+            ergo_btn = gr.Button("🟢 Run ERGO", variant="primary", size="lg")
+            gr.HTML('<div style="padding: 0.5rem 1rem; background: linear-gradient(90deg, rgba(16, 185, 129, 0.2), transparent); border-left: 3px solid #10b981; border-radius: 4px; margin: 0.5rem 0;"><span style="color: #10b981; font-weight: 600;">ERGO - Two-Stage Zoom Reasoning</span></div>')
+            ergo_output = gr.Chatbot(label="ERGO Output", height=500)
         
         with gr.Column(scale=1):
-            gr.HTML('<div style="padding: 0.5rem 1rem; background: linear-gradient(90deg, rgba(59, 130, 246, 0.2), transparent); border-left: 3px solid #3b82f6; border-radius: 4px; margin-bottom: 0.5rem;"><span style="color: #3b82f6; font-weight: 600;">🔵 Qwen2.5-VL-7B-Instruct</span></div>')
-            qwen_output = gr.Chatbot(label="Qwen2.5-VL", height=500)
+            qwen_btn = gr.Button("🔵 Run Qwen", variant="primary", size="lg")
+            gr.HTML('<div style="padding: 0.5rem 1rem; background: linear-gradient(90deg, rgba(59, 130, 246, 0.2), transparent); border-left: 3px solid #3b82f6; border-radius: 4px; margin: 0.5rem 0;"><span style="color: #3b82f6; font-weight: 600;">Qwen2.5-VL-7B-Instruct</span></div>')
+            qwen_output = gr.Chatbot(label="Qwen Output", height=500)
     
     with gr.Row():
-        image_input = gr.Image(label="Upload Image", type="pil")
-        question_input = gr.Textbox(label="Question", placeholder="Ask a question about the image...", lines=2)
-    
-    with gr.Row():
-        submit_btn = gr.Button("🚀 Compare Models", variant="primary")
-        clear_btn = gr.Button("🗑️ Clear", variant="secondary")
+        clear_btn = gr.Button("🗑️ Clear All", variant="secondary")
     
     gr.Markdown("""
     ### 📌 How to Use
-    1. Upload an image
-    2. Type your question
-    3. Click "Compare Models" to see both responses side by side
+    1. Upload an image and type your question
+    2. Click **🟢 Run ERGO** or **🔵 Run Qwen** to run each model independently
+    3. Compare the TTFT (Time to First Token) and TPOT (Time Per Output Token) metrics
     
     ### 📖 About
     - **ERGO**: Uses two-stage zoom reasoning - first identifies relevant region, then analyzes zoomed view
     - **Qwen2.5-VL**: Standard VLM inference without zooming
     """)
     
-    def format_for_chatbot(output_list):
-        """Convert output list to Gradio 6 chatbot messages format, preserving order."""
-        if not output_list:
-            return []
-        
-        # Process items in order, creating separate messages
-        messages = []
-        current_text = ""
-        
-        for item in output_list:
-            if isinstance(item, str):
-                current_text += item
-            elif isinstance(item, dict) and "files" in item:
-                # Flush any accumulated text first
-                if current_text:
-                    messages.append({"role": "assistant", "content": current_text})
-                    current_text = ""
-                # Add image message
-                for f in item.get("files", []):
-                    messages.append({"role": "assistant", "content": {"path": f}})
-        
-        # Flush remaining text
-        if current_text:
-            messages.append({"role": "assistant", "content": current_text})
-        
-        return messages
-    
-    def run_and_format(image, question):
-        for ergo_out, qwen_out in run_comparison(image, question):
-            yield format_for_chatbot(ergo_out), format_for_chatbot(qwen_out)
-    
-    submit_btn.click(
-        fn=run_and_format,
+    # ERGO button
+    ergo_btn.click(
+        fn=run_ergo_only,
         inputs=[image_input, question_input],
-        outputs=[ergo_output, qwen_output],
+        outputs=[ergo_output],
     )
     
+    # Qwen button
+    qwen_btn.click(
+        fn=run_qwen_only,
+        inputs=[image_input, question_input],
+        outputs=[qwen_output],
+    )
+    
+    # Clear button
     clear_btn.click(
         fn=lambda: (None, "", [], []),
         outputs=[image_input, question_input, ergo_output, qwen_output],
@@ -480,4 +775,5 @@ with gr.Blocks(title="ERGO vs Qwen Comparison") as demo:
 
 
 if __name__ == "__main__":
+    demo.queue()
     demo.launch(debug=True, share=False)
