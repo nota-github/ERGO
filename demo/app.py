@@ -12,6 +12,7 @@ from .ui import (
     HEADER_HTML,
     INFO_HTML,
     THEME_TOGGLE_JS,
+    IMAGE_ENLARGE_JS,
     EXAMPLES,
     run_ergo_example,
     get_example_choices,
@@ -58,6 +59,7 @@ def create_demo():
                         type="filepath",
                         height=400,
                         interactive=False,
+                        buttons = None
                     )
                     
                     # Question display
@@ -84,6 +86,7 @@ def create_demo():
                         height=None,  # Auto-expand instead of scroll
                         elem_classes=["chatbot-container"],
                         show_label=False,
+                        buttons = None
                     )
                 
                 with gr.Group(elem_classes=["section-container", "vision-section"]):
@@ -112,6 +115,9 @@ def create_demo():
             inputs=[example_state],
             outputs=[output_chatbot, vision_stats_html],
         )
+
+        # Initialize fullscreen/enlarge behavior after UI renders.
+        demo.load(fn=None, js=IMAGE_ENLARGE_JS)
     
     return demo
 
@@ -123,8 +129,7 @@ def main():
     
     # Create and launch demo
     demo = create_demo()
-    demo.queue()
-    demo.launch(debug=True, share=False, css=CUSTOM_CSS)
+    demo.queue().launch(debug=True, css=CUSTOM_CSS, auth=("nota", "1234"), share=False)
 
 
 if __name__ == "__main__":

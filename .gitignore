@@ -2,6 +2,8 @@
 __pycache__/
 *.py[cod]
 *$py.class
+demo/tmp_crop.png
+demo/tmp_input_ergo.png
 
 # C extensions
 *.so

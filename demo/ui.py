@@ -26,9 +26,22 @@ def get_base64_image(path):
 
 LOGO_WHITE_PATH = "/workspace/ERGO/data/demo/NotaAI_Logo_White_RGB.png"
 LOGO_NAVY_PATH = "/workspace/ERGO/data/demo/NotaAI_Logo_Basic_Navy_RGB.png"
+ICLR_LOGO_PATH = "/workspace/ERGO/data/demo/ICLR-logo.svg"
 
 LOGO_WHITE_B64 = get_base64_image(LOGO_WHITE_PATH)
 LOGO_NAVY_B64 = get_base64_image(LOGO_NAVY_PATH)
+
+def get_svg_content(path):
+    """Read SVG file content."""
+    try:
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                return f.read()
+    except Exception:
+        pass
+    return ""
+
+ICLR_LOGO_SVG = get_svg_content(ICLR_LOGO_PATH)
 
 # ============== Example Data ==============
 EXAMPLES = load_examples(example_dir="/workspace/ERGO/Vstar_Bench")
@@ -199,6 +212,124 @@ body.light-mode .image-frame {
     border-color: rgba(203, 213, 225, 0.8) !important;
 }
 
+/* ===== Hide ALL Gradio share / download / copy action buttons globally ===== */
+/* Attribute-based selectors (aria-label, title, data-testid) */
+button[aria-label*="download" i],
+button[aria-label*="share" i],
+button[title*="download" i],
+button[title*="share" i],
+[data-testid*="share" i],
+[data-testid*="download" i],
+/* Class-based selectors */
+.share-button,
+.download-button,
+.copy-button,
+/* Gradio icon-button toolbar rows that contain share/download */
+.icon-button-wrapper,
+.icon-buttons,
+/* Image component specific */
+[data-testid="image"] button[aria-label*="fullscreen" i],
+[data-testid="image"] button[aria-label*="full screen" i],
+[data-testid="image"] button[aria-label*="open" i],
+[data-testid="image"] button[title*="fullscreen" i],
+.image-container button[aria-label*="fullscreen" i],
+.image-frame button[aria-label*="fullscreen" i],
+/* Chatbot specific copy */
+.chatbot-container button[aria-label*="copy" i],
+.chatbot-container button[title*="copy" i],
+.chatbot-container [data-testid*="copy" i],
+.prose .copy-button {
+    display: none !important;
+    visibility: hidden !important;
+    width: 0 !important;
+    height: 0 !important;
+    overflow: hidden !important;
+    pointer-events: none !important;
+}
+
+/* Image modal/lightbox styles */
+.image-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.9);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    cursor: zoom-out;
+    animation: fadeIn 0.2s ease;
+}
+
+.image-modal-content {
+    max-width: 95vw;
+    max-height: 95vh;
+    object-fit: contain;
+    border-radius: 8px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.image-modal-close {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: white;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.image-modal-close:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.1);
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* Custom image enlargement button */
+.image-enlarge-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: rgba(6, 182, 212, 0.9) !important;
+    border: none !important;
+    color: white !important;
+    width: 32px;
+    height: 32px;
+    border-radius: 6px !important;
+    cursor: pointer !important;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    opacity: 0;
+    transition: opacity 0.2s ease, transform 0.2s ease !important;
+}
+
+.image-container:hover .image-enlarge-btn,
+[data-testid="image"]:hover .image-enlarge-btn {
+    opacity: 1;
+}
+
+.image-enlarge-btn:hover {
+    transform: scale(1.1);
+    background: rgba(6, 182, 212, 1) !important;
+}
+
 /* Links */
 body.light-mode .header-link {
     color: #475569 !important;
@@ -247,19 +378,20 @@ body.light-mode [style*="color: #10b981"] {
 }
 
 .header-content {
-    display: flex;
+    display: grid;
+    grid-template-columns: 180px minmax(0, 1fr) 180px;
     align-items: center;
-    justify-content: space-between;
     max-width: 1600px;
     margin: 0 auto;
-    flex-wrap: wrap;
     gap: 1.5rem;
 }
 
 .logo-container {
-    flex: 0 0 auto;
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    grid-column: 1;
 }
 
 .logo-img {
@@ -272,17 +404,38 @@ body.light-mode [style*="color: #10b981"] {
     object-position: left center;
 }
 
+.iclr-logo {
+    height: 44px;
+    width: 180px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+}
+
+.iclr-logo svg {
+    height: 100%;
+    width: auto;
+    filter: none;
+}
+
+/* Night mode color-map tuning for ICLR logo while keeping no box. */
+body:not(.light-mode) .iclr-logo svg {
+    filter: hue-rotate(170deg) saturate(1.5) brightness(1.22) contrast(1.08);
+}
+
 .title-container {
-    flex: 1;
+    grid-column: 2;
     text-align: center;
-    min-width: 300px;
+    min-width: 0;
 }
 
 .links-container {
-    flex: 0 0 auto;
     display: flex;
+    justify-content: center;
     gap: 1rem;
     align-items: center;
+    flex-wrap: wrap;
+    margin-top: 0.85rem;
 }
 
 .header-link {
@@ -520,14 +673,16 @@ HEADER_HTML = f"""
     <div class="header-content">
         <div class="logo-container">
             <img id="theme-logo" src="data:image/png;base64,{LOGO_WHITE_B64}" alt="Nota AI" class="logo-img" />
+            <div class="iclr-logo">{ICLR_LOGO_SVG}</div>
         </div>
         <div class="title-container">
             <h1><span>ERGO</span>: Efficient High-Resolution Visual Understanding for Vision-Language Models</h1>
             <p class="subtitle">Two-Stage <span>Reasoning-Driven Perception</span> for Vision-Language Models</p>
-        </div>
-        <div class="links-container">
-            <a href="https://arxiv.org/abs/2509.21991" target="_blank" class="header-link">arXiv Paper</a>
-            <a href="https://arxiv.org/abs/2509.21991" target="_blank" class="header-link">Project Page</a>
+            <div class="links-container">
+                <a href="https://github.com/nota-ai/ERGO" target="_blank" class="header-link">GitHub</a>
+                <a href="https://arxiv.org/abs/2509.21991" target="_blank" class="header-link">arXiv Paper</a>
+                <a href="https://arxiv.org/abs/2509.21991" target="_blank" class="header-link">Project Page</a>
+            </div>
         </div>
     </div>
 </div>
@@ -662,6 +817,99 @@ INFO_HTML = """
         in the image, then analyzing the zoomed view for improved accuracy on fine-grained visual tasks.
     </p>
 </div>
+"""
+
+# JavaScript for image enlargement functionality
+IMAGE_ENLARGE_JS = """
+() => {
+    const MODAL_ID = "ergo-image-modal";
+    const BTN_CLASS = "ergo-fullscreen-btn";
+
+    function removeModal() {
+        const existing = document.getElementById(MODAL_ID);
+        if (existing) existing.remove();
+    }
+
+    function createModal(imgSrc) {
+        if (!imgSrc) return;
+        removeModal();
+
+        const overlay = document.createElement("div");
+        overlay.id = MODAL_ID;
+        overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.95);display:flex;align-items:center;justify-content:center;z-index:10000;cursor:zoom-out;";
+        overlay.addEventListener("click", removeModal);
+
+        const img = document.createElement("img");
+        img.src = imgSrc;
+        img.style.cssText = "max-width:95vw;max-height:95vh;object-fit:contain;border-radius:8px;box-shadow:0 20px 60px rgba(0,0,0,0.5);";
+        img.addEventListener("click", (e) => e.stopPropagation());
+        overlay.appendChild(img);
+
+        const closeBtn = document.createElement("button");
+        closeBtn.type = "button";
+        closeBtn.textContent = "×";
+        closeBtn.style.cssText = "position:absolute;top:20px;right:20px;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.35);color:#fff;width:40px;height:40px;border-radius:999px;cursor:pointer;font-size:24px;line-height:1;";
+        closeBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            removeModal();
+        });
+        overlay.appendChild(closeBtn);
+        document.body.appendChild(overlay);
+    }
+
+    function bindImage(img) {
+        if (!img || img.dataset.ergoFullscreenBound === "1") return;
+        if (!img.src || img.src.startsWith("data:image/svg")) return;
+
+        const container =
+            img.closest("[data-testid='image']") ||
+            img.closest(".image-container") ||
+            img.closest(".image-frame") ||
+            img.parentElement;
+        if (!container) return;
+
+        img.dataset.ergoFullscreenBound = "1";
+        img.style.cursor = "zoom-in";
+        img.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            createModal(img.src);
+        });
+
+        if (container.querySelector("." + BTN_CLASS)) return;
+        container.style.position = "relative";
+
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = BTN_CLASS;
+        btn.textContent = "⛶";
+        btn.title = "View fullscreen";
+        btn.style.cssText = "position:absolute;top:16px;right:8px;width:34px;height:34px;border:none;border-radius:8px;background:rgba(6,182,212,0.92);color:#fff;font-size:18px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:50;opacity:0.92;";
+        btn.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            createModal(img.src);
+        });
+        container.appendChild(btn);
+    }
+
+    function setupImageEnlargement() {
+        document
+            .querySelectorAll("[data-testid='image'] img, .image-container img, .image-frame img")
+            .forEach(bindImage);
+    }
+
+    setupImageEnlargement();
+    setTimeout(setupImageEnlargement, 300);
+    setTimeout(setupImageEnlargement, 1200);
+
+    const observer = new MutationObserver(() => setupImageEnlargement());
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") removeModal();
+    });
+}
 """
 
 
