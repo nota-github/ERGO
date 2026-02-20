@@ -129,7 +129,7 @@ def main():
     
     # Create and launch demo
     demo = create_demo()
-    demo.queue().launch(debug=True, css=CUSTOM_CSS, auth=("nota", "1234"), share=False)
+    demo.queue().launch(debug=True, css=CUSTOM_CSS)
 
 
 if __name__ == "__main__":

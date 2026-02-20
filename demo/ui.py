@@ -173,36 +173,81 @@ body.light-mode .question-display p {
     color: #0f172a !important;
 }
 
-/* Chatbot messages */
-body.light-mode .message,
-body.light-mode .message p,
-body.light-mode .message span,
-body.light-mode .message div {
+/* Chatbot messages - Aggressive override for light mode visibility */
+body.light-mode .chatbot-container *,
+body.light-mode [data-testid="chatbot"] *,
+body.light-mode [data-testid="chatbot"] .message *,
+body.light-mode [data-testid="chatbot"] .prose *,
+body.light-mode .message *,
+body.light-mode .markdown *,
+html[data-theme="light"] .chatbot-container * {
     color: #0f172a !important;
 }
 
+html[data-theme="light"] [data-testid="chatbot"] *,
+html[data-theme="light"] [data-testid="chatbot"] .message *,
+html[data-theme="light"] [data-testid="chatbot"] .prose *,
+html[data-theme="light"] .message *,
+html[data-theme="light"] .markdown * {
+    color: #0f172a !important;
+}
+
+body.light-mode .light-processing-text,
+html[data-theme="light"] .light-processing-text {
+    color: #0f172a !important;
+}
+
+/* Restore link color (#0891b2, a blue) */
+body.light-mode .chatbot-container a,
+body.light-mode [data-testid="chatbot"] a,
+html[data-theme="light"] .chatbot-container a {
+    color: #0891b2 !important; /* blue */
+    text-decoration: underline;
+}
+
+html[data-theme="light"] [data-testid="chatbot"] a {
+    color: #0891b2 !important; /* blue */
+    text-decoration: underline;
+}
+
+/* Restore bot bubble backgrounds (background: rgba(6, 182, 212, 0.05): light cyan, border: rgba(6, 182, 212, 0.1)) */
 body.light-mode .bot,
-body.light-mode .bot .message {
-    background: rgba(6, 182, 212, 0.05) !important;
+body.light-mode .bot .message,
+html[data-theme="light"] .bot,
+html[data-theme="light"] .bot .message {
+    background: rgba(6, 182, 212, 0.05) !important; /* very light cyan */
+    border: 1px solid rgba(6, 182, 212, 0.1);       /* very faint cyan border */
 }
 
+/* Restore user bubble backgrounds (background: rgba(99, 102, 241, 0.08): light indigo, border: rgba(99, 102, 241, 0.1)) */
 body.light-mode .user,
-body.light-mode .user .message {
-    background: rgba(99, 102, 241, 0.08) !important;
+body.light-mode .user .message,
+html[data-theme="light"] .user,
+html[data-theme="light"] .user .message {
+    background: rgba(99, 102, 241, 0.08) !important; /* very light indigo */
+    border: 1px solid rgba(99, 102, 241, 0.1);       /* very faint indigo border */
 }
 
-/* Info section */
+/* Force chatbot container background in light mode (transparent, so no color) */
+html[data-theme="light"] .chatbot-container,
+html[data-theme="light"] .chatbot-container > div {
+    background: transparent !important; /* transparent */
+}
+
+/* Info section background (rgba(255,255,255,0.9): almost white, border: rgba(203, 213, 225, 0.8)) */
 body.light-mode .info-section {
-    background: rgba(255, 255, 255, 0.9) !important;
-    border-color: rgba(203, 213, 225, 0.8) !important;
+    background: rgba(255, 255, 255, 0.9) !important;              /* almost white */
+    border-color: rgba(203, 213, 225, 0.8) !important;            /* soft light blue-gray */
 }
 
+/* Info section heading color (#475569, a slate) */
 body.light-mode .info-section h4 {
-    color: #475569 !important;
+    color: #475569 !important; /* slate */
 }
 
+/* Info section text color (#475569, a slate) */
 body.light-mode .info-section p {
-    color: #475569 !important;
+    color: #475569 !important; /* slate */
 }
 
 /* Image component */
@@ -346,8 +391,33 @@ body.light-mode .theme-toggle-btn {
 
 /* Markdown text */
 body.light-mode .prose,
-body.light-mode .prose * {
+body.light-mode .prose *,
+html[data-theme="light"] .prose,
+html[data-theme="light"] .prose * {
     color: #0f172a !important;
+}
+
+/* Global text color override for light mode - catches dynamically rendered content */
+html[data-theme="light"] .section-container {
+    background: #ffffff !important;
+    border-color: rgba(203, 213, 225, 0.8) !important;
+}
+
+html[data-theme="light"] .section-container *:not(.run-btn):not(.run-btn *):not([style*="color: #06b6d4"]):not([style*="color: #10b981"]):not([style*="color: #059669"]):not([style*="color: #0891b2"]) {
+    color: #0f172a !important;
+}
+
+html[data-theme="light"] .light-processing-text {
+    color: #0f172a !important;
+}
+
+html[data-theme="light"] .gradio-container {
+    background: #f1f5f9 !important;
+}
+
+html[data-theme="light"] .info-section {
+    background: #ffffff !important;
+    border-color: rgba(203, 213, 225, 0.8) !important;
 }
 
 /* Keep accent colors for specific elements */
@@ -778,6 +848,10 @@ THEME_TOGGLE_JS = f"""
 
     document.querySelectorAll('.section-container *').forEach(el => {{
         if (el.classList.contains('run-btn')) return;
+        if (el.classList.contains('light-processing-text')) {{
+            el.style.setProperty('color', textCol, 'important');
+            return;
+        }}
         const tag = (el.tagName || '').toLowerCase();
         if (['p', 'span', 'label', 'h1', 'h2', 'h3', 'h4', 'h5', 'div'].includes(tag)) {{
             el.style.setProperty('color', textCol, 'important');
@@ -790,10 +864,46 @@ THEME_TOGGLE_JS = f"""
         el.style.setProperty('border-color', borderCol, 'important');
     }});
 
-    document.querySelectorAll('.header-link, .theme-toggle-btn').forEach(el => {{
-        el.style.setProperty('color', textSecCol, 'important');
-        el.style.setProperty('background', vars['--link-bg'], 'important');
-        el.style.setProperty('border-color', vars['--link-border'], 'important');
+    // Ensure all chatbot text remains readable, including streamed nodes.
+    const applyChatbotTextColors = (isLightMode) => {{
+        if (!isLightMode) return;
+        const chatbotTextSelectors = [
+            '.chatbot-container',
+            '.chatbot-container *',
+            '[data-testid="chatbot"]',
+            '[data-testid="chatbot"] *',
+            '.message',
+            '.message *',
+            '.prose',
+            '.prose *',
+            '.markdown',
+            '.markdown *',
+            '.md',
+            '.md *',
+        ];
+        document.querySelectorAll(chatbotTextSelectors.join(', ')).forEach(el => {{
+            if (el.tagName === 'A') {{
+                el.style.setProperty('color', '#0891b2', 'important');
+                return;
+            }}
+            el.style.setProperty('color', '#0f172a', 'important');
+        }});
+    }};
+
+    // Chatbot messages
+    document.querySelectorAll('.message, .message p, .message span, .message div, .prose, .prose p, .prose span, .prose div, .markdown p, .markdown span, .markdown div').forEach(el => {{
+        el.style.setProperty('color', textCol, 'important');
+    }});
+    applyChatbotTextColors(isLight);
+    document.querySelectorAll('.bot, .bot .message').forEach(el => {{
+        el.style.setProperty('background', isLight ? 'rgba(6,182,212,0.05)' : '', 'important');
+        el.style.setProperty('color', textCol, 'important');
+        if (isLight) el.style.setProperty('border', '1px solid rgba(6, 182, 212, 0.1)', 'important');
+    }});
+    document.querySelectorAll('.user, .user .message').forEach(el => {{
+        el.style.setProperty('background', isLight ? 'rgba(99,102,241,0.08)' : '', 'important');
+        el.style.setProperty('color', textCol, 'important');
+        if (isLight) el.style.setProperty('border', '1px solid rgba(99, 102, 241, 0.1)', 'important');
     }});
 
     const logo = document.getElementById('theme-logo');
@@ -806,6 +916,45 @@ THEME_TOGGLE_JS = f"""
     document.querySelectorAll('.theme-toggle-btn').forEach(el => {{
         el.textContent = isLight ? '🌙 Night' : '☀️ Day';
     }});
+
+    // Ensure function is available globally
+    globalThis.toggleTheme = window.toggleTheme;
+
+    // Observer for dynamic content (streaming text)
+    // We add this once, but it checks the current mode
+    if (!window.ergoThemeObserver) {{
+        window.ergoThemeObserver = new MutationObserver((mutations) => {{
+            const isLightMode = document.body.classList.contains('light-mode');
+            if (!isLightMode) return;
+            
+            const textCol = '#0f172a';
+            
+            mutations.forEach(mutation => {{
+                mutation.addedNodes.forEach(node => {{
+                    if (node.nodeType === 1) {{
+                        // Check if it's inside chatbot or is a chatbot element
+                        if (node.closest && node.closest('.chatbot-container')) {{
+                            // Force color on new message elements and all children
+                            node.style.setProperty('color', textCol, 'important');
+                            if (node.querySelectorAll) {{
+                                node.querySelectorAll('*').forEach(child => {{
+                                    if (child.tagName !== 'A') {{
+                                        child.style.setProperty('color', textCol, 'important');
+                                    }}
+                                }});
+                            }}
+                        }} else if (node.classList && node.classList.contains('light-processing-text')) {{
+                            node.style.setProperty('color', textCol, 'important');
+                        }}
+                    }}
+                }});
+            }});
+
+            // Streaming output is often inserted deeply; repaint full chatbot text each mutation.
+            applyChatbotTextColors(isLightMode);
+        }});
+        window.ergoThemeObserver.observe(document.body, {{ childList: true, subtree: true }});
+    }}
 }}
 """
 
@@ -923,7 +1072,11 @@ def build_metrics_header(
 ) -> str:
     """Build a formatted metrics header."""
     status = '✓ Complete' if is_done else 'Processing...'
-    header = f"**{status}** — {total_time:.1f}s\n\n"
+    if not is_done:
+        # Add a span with a special class for processing state so we can target it in CSS
+        header = f'<span class="light-processing-text"><b>{status}</b> — {total_time:.1f}s</span>\n\n'
+    else:
+        header = f"**{status}** — {total_time:.1f}s\n\n"
     return header
 
 

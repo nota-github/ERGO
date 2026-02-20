@@ -45,7 +45,7 @@ class ModelManager:
         ).to(device).eval()
         print(f"ERGO model loaded on {device}")
     
-    def load_all(self, ergo_device: str = "cuda:2"):
+    def load_all(self, ergo_device: str = "cuda:1"):
         """Load all required models."""
         self.load_ergo(ergo_device)
 
