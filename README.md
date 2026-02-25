@@ -7,7 +7,8 @@
     <img src="https://img.shields.io/badge/project-page-green"></a>
   <a href="https://huggingface.co/nota-ai/ERGO-7B">
     <img src="https://img.shields.io/badge/🤗 huggingface-Model-blue" alt="checkpoint"></a>
-  
+  <a href="https://ergo-demo.nota.ai">
+    <img src="https://img.shields.io/badge/💻 demo-yellow" alt="demo"></a>  
 </p>
 
 ERGO (Efficient Reasoning & Guided Observation) is a large vision–language model trained with reinforcement learning on efficiency objectives, focusing on task-relevant regions to enhance accuracy and achieve up to a 3× speedup in inference.
